@@ -19,6 +19,7 @@ typedef struct {
 	// thread context list (ctx_list) is RCU; following value is used for
 	// readers "tagging"
 	AO_t list_reader_tag;
+	AO_t writers_num;
 	
 	struct {
 		void ( *terminate )( void *ptr, int is_concurrent );
