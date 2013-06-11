@@ -7,7 +7,7 @@
 // TODO: Time bomb: fixed number of elements in deletion list
 // Just to push development further, I'm leaving this to-do
 
-#define POINTERS_NUMBER ( sizeof( AO_t ) * 8 )
+#define POINTERS_NUMBER 32
 
 typedef struct _thread_list_t {
 	thread_ctx_t *next;
@@ -28,9 +28,9 @@ typedef struct {
 	
 	struct {
 		size_t size;
-		size_t offset;
+		size_t align;
 	} instance;
-	
+
 	thread_list_t ctx_list;
 } reclaimer_t;
 
@@ -43,36 +43,39 @@ typedef struct {
 	// the reading flag
 	AO_t is_list_reader;
 	AO_t list_reader_tag;
+	
 	struct {
-		// map of occupied and free slots in deleted_ptrs array
-		AO_t map;
+		size_t capacity;
+		AO_t max_index;
+		AO_t ptrs_number;
 		// list of objects deleted by the thread; first bit of pointer value
 		// is flag signalized if object has been terminated already
-		void *ptrs[ POINTERS_NUMBER ];
+		void **ptrs;
+		void **shadow;
 		// auxiliary list allows another threads walking through the thread
 		// context list mark particular node in deleted list with reference
 		// counter
-		AO_t claims[ POINTERS_NUMBER ];
+		AO_t *claims;
 	} deleted;
 
 	struct {
 		AO_t map;
-		void *ptrs[ POINTERS_NUMBER ];
-	} hazard;
+		void **hazard_ptrs[ POINTERS_NUMBER ];
+	} hazard
 } thread_ctx_t;
 
 extern reclaimer_t *reclaim_init(
 	void ( *terminate )( void *ptr, int is_concurrent ),
 	void ( *clean_up )( void *ptr ),
 	size_t inst_size,
-	size_t inst_offset
+	size_t inst_align
 );
 
 extern thread_ctx_t *reclaim_get_context( reclaimer_t *r );
 
 extern void *reclaim_deref_link( thread_ctx_t *ctx, void **ptr_to_link );
 
-extern void *reclaim_release_link( thread_ctx_t *ctx, void *link );
+extern int reclaim_release_link( thread_ctx_t *ctx, void *link );
 
 extern int reclaim_compare_and_swap_link( thread_ctx_t *ctx,
 	void **where,
