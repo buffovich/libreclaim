@@ -7,7 +7,9 @@
 // TODO: Time bomb: fixed number of elements in deletion list
 // Just to push development further, I'm leaving this to-do
 
-#define POINTERS_NUMBER 32
+#define POINTERS_NUMBER_POWER2 ( 5 )
+
+#define POINTERS_NUMBER ( 1 << POINTERS_NUMBER_POWER2 )
 
 typedef struct _thread_list_t {
 	thread_ctx_t *next;
@@ -31,8 +33,27 @@ typedef struct {
 		size_t align;
 	} instance;
 
+	AO_t threads_num;
 	thread_list_t ctx_list;
 } reclaimer_t;
+
+typedef struct _deleted {
+	struct _deleted *next;
+	size_t capacity;
+	// auxiliary list allows another threads walking through the thread
+	// context list mark particular node in deleted list with reference
+	// counter
+	AO_t *claims;
+	// list of objects deleted by the thread; first bit of pointer value
+	// is flag signalized if object has been terminated already
+	void **ptrs;
+} deleted_t;
+
+typedef struct {
+	void *ptr;
+	size_t idx;
+	deleted_t *chunk;
+} shadow_ptr_t;
 
 typedef struct {
 	thread_list_t header;
@@ -46,17 +67,18 @@ typedef struct {
 	
 	struct {
 		size_t capacity;
-		AO_t max_index;
 		AO_t ptrs_number;
-		// list of objects deleted by the thread; first bit of pointer value
-		// is flag signalized if object has been terminated already
-		void **ptrs;
-		void **shadow;
-		// auxiliary list allows another threads walking through the thread
-		// context list mark particular node in deleted list with reference
-		// counter
-		AO_t *claims;
+		AO_t global_max_idx;
+		AO_t first_free_idx;
+		deleted_t *first_free_chunk;
+		deleted_t *last_chunk;
+		deleted_t chunk;
 	} deleted;
+
+	struct {
+		size_t capacity;
+		shadow_ptr_t *ptrs;
+	} shadow;
 
 	struct {
 		AO_t map;
