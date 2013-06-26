@@ -1,0 +1,6 @@
+nhazards > ndel
+K < log ndel
+k < K
+nhazards * K + ( nhazards + ndel * k ) * log( nhazards )
+ndel * k + ( ndel  + nhazards * K  ) * log( ndel  )
+nhazards
