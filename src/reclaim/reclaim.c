@@ -6,6 +6,11 @@
 
 #define EMPTY_MAP ( ~( 0ul ) )
 
+static struct timespec _spin_timeout = {
+	.tv_sec = 0,
+	.tv_nsec = 400
+};
+
 reclaimer_t *reclaim_init(
 	void ( *terminate )( void *ptr, int is_concurrent ),
 	void ( *clean_up )( void *ptr ),
@@ -29,13 +34,14 @@ reclaimer_t *reclaim_init(
 
 	r->writers_num = 0;
 	r->ctx_list.next = NULL;
+	r->threads_num = 0;
 
 	AO_nop_full();
 
 	return r;
 }
 
-static void _destroy_ctx( thread_ctx_t *ctx ) {
+void reclaim_local_fini( thread_ctx_t *ctx ) {
 	assert( ctx != NULL );
 
 	_ctx_remove_from_list( ctx );
@@ -51,6 +57,22 @@ inline static void _ctx_rcu_reclaim( thread_ctx_t *ctx ) {
 	fetch_and_dec( &( ctx->reclaimer->writers_num ) );
 	_ctx_rcu_wait_for_writers( ctx->reclaimer );
 
+	if( ctx->deleted->ptrs_number > 0 ) {
+		_clean_local( ctx );
+
+		do {
+			_scan( ctx );
+
+			if( ctx->deleted->ptrs_number > 0 ) {
+				nanosleep( &_spin_timeout, NULL );
+				_scan( ctx );
+			}
+
+			if( ctx->deleted->ptrs_number > 0 )
+				pthread_yield();
+		} while( ctx->deleted->ptrs_number > 0 );
+	}
+
 	rope_destroy( ctx->deleted );
 
 	free( ctx );
@@ -61,21 +83,27 @@ inline static void _ctx_rcu_wait_for_readers( reclaimer_t *r ) {
 		ctx != NULL;
 		ctx = AO_load( &( ctx->next ) )
 	)
-		if( AO_load( &( ctx->is_list_reader ) ) ) {
-			if( AO_load( &( ctx->list_reader_tag ) < my_tag )
-				do {
-					pthread_yield();
-				} while(
-					AO_load( &( ctx->is_list_reader ) ) &&
-					( AO_load( &( ctx->list_reader_tag ) ) < my_tag )
-				);
-		}
+		while(
+			AO_load( &( ctx->is_list_reader ) ) &&
+			( AO_load( &( ctx->list_reader_tag ) ) < my_tag )
+		) {
+			nanosleep( &_spin_timeout, NULL );
+
+			if(
+				AO_load( &( ctx->is_list_reader ) ) &&
+				( AO_load( &( ctx->list_reader_tag ) ) < my_tag )
+			)
+				pthread_yield();
+		};
 }
 
 inline static void _ctx_rcu_wait_for_writers( reclaimer_t *r ) {
-	do {
-		pthread_yield();
-	} while ( AO_load( &( r->writers_num ) ) > 0 );
+	while ( AO_load( &( r->writers_num ) ) > 0 ) {
+		nanosleep( &_spin_timeout, NULL );
+
+		if( AO_load( &( r->writers_num ) ) > 0 )
+			pthread_yield();
+	}
 }
 
 void reclaim_fini( reclaimer_t *r ) {
@@ -138,6 +166,7 @@ inline static void _ctx_put_into_list( thread_ctx_t *ctx ) {
 		ctx->header.next->prev = ctx;
 
 	pthread_mutex_unlock( &( ctx->reclaimer->write_guard ) );
+	fetch_and_inc( &( ctx->reclaimer->threads_num ) );
 }
 
 inline static void _ctx_remove_from_list( thread_ctx_t *ctx ) {
@@ -151,6 +180,7 @@ inline static void _ctx_remove_from_list( thread_ctx_t *ctx ) {
 		ctx->header.next->prev = ctx->prev;
 
 	pthread_mutex_unlock( &( ctx->reclaimer->write_guard ) );
+	fetch_and_dec( &( ctx->reclaimer->threads_num ) );
 }
 
 inline static void _ctx_rcu_mark_as_reader( thread_ctx_t *ctx ) {
@@ -276,15 +306,21 @@ void reclaim_free( thread_ctx_t *ctx, void *what ) {
 	_link_mark_as_deleted( what );
 	rope_owner_put( ctx->deleted, what );
 
-	if( ctx->deleted->ptrs_number == ( ctx->deleted->capacity - 1 ) )
+	if( ctx->deleted->ptrs_number >=
+		AO_load( &( ctx->reclaimer->threads_num ) ) * POINTERS_NUMBER
+	)
 		_scan( ctx );
 
-	if( ctx->deleted->ptrs_number == ( ctx->deleted->capacity - 1 ) ) {
+	if( ctx->deleted->ptrs_number >=
+		AO_load( &( ctx->reclaimer->threads_num ) ) * POINTERS_NUMBER
+	) {
 		_clean_local( ctx );
 		_scan( ctx );
 	}
 
-	if( ctx->deleted->ptrs_number == ( ctx->deleted->capacity - 1 ) ) {
+	if( ctx->deleted->ptrs_number >=
+		AO_load( &( ctx->reclaimer->threads_num ) ) * POINTERS_NUMBER
+	) {
 		_clean_all( ctx );
 		_scan( ctx );
 	}

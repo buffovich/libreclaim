@@ -31,6 +31,7 @@ typedef struct {
 		size_t align;
 	} instance;
 
+	AO_t threads_num;
 	thread_list_t ctx_list;
 } reclaimer_t;
 
@@ -76,6 +77,8 @@ extern void reclaim_store_link( thread_ctx_t *ctx, void **where, void *link );
 extern void *reclaim_alloc( thread_ctx_t *ctx );
 
 extern void reclaim_free( thread_ctx_t *ctx, void *what );
+
+extern void reclaim_local_fini( thread_ctx_t *ctx );
 
 extern void reclaim_fini( reclaimer_t *r );
 
